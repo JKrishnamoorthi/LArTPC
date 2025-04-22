@@ -157,7 +157,7 @@ int main(int argc, char **argv)
 
     // Get the UI manager and set up commands
     auto UImanager = G4UImanager::GetUIpointer();
-    UImanager->ApplyCommand("/vis/open OGL 600x600-0+0");              // OpenGL visualization
+    UImanager->ApplyCommand("/vis/open TSGQT");              // OpenGL visualization
     UImanager->ApplyCommand("/vis/viewer/set/viewpointThetaPhi 90 0"); // Set initial viewpoint
     UImanager->ApplyCommand("/vis/drawVolume");                        // Draw the volume geometry
     UImanager->ApplyCommand("/vis/scene/add/trajectories smooth");     // Add smooth trajectories
