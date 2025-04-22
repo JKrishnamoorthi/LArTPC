@@ -19,6 +19,8 @@
 #include "G4VModularPhysicsList.hh"
 #include "FTFP_BERT.hh"
 #include "G4UserEventAction.hh"
+#include "G4ThreeVector.hh"
+#include "globals.hh"
 
 // Detector Construction
 class MyDetectorConstruction : public G4VUserDetectorConstruction
@@ -30,13 +32,13 @@ public:
 
         // World volume
         auto worldMat = nist->FindOrBuildMaterial("G4_AIR");
-        auto worldSolid = new G4Box("World", 2.0 * m, 2.0 * m, 2.0 * m);
+        auto worldSolid = new G4Box("World", 100.0 * m, 100.0 * m, 100.0 * m);
         auto worldLogic = new G4LogicalVolume(worldSolid, worldMat, "World");
-        auto worldPhys = new G4PVPlacement(0, {}, worldLogic, "World", 0, false, 0);
+        auto worldPhys = new G4PVPlacement(0, {}, worldLogic, "World", nullptr, false, 0);
 
         // LArTPC Volume
         auto argonMat = nist->FindOrBuildMaterial("G4_lAr");
-        auto larSolid = new G4Box("LArBox", 1.0 * m, 1.0 * m, 1.0 * m);
+        auto larSolid = new G4Box("LArBox", 65.0 * m, 12.0 * m, 12.0 * m);
         auto larLogic = new G4LogicalVolume(larSolid, argonMat, "LArBox");
         new G4PVPlacement(0, {}, larLogic, "LArBox", worldLogic, false, 0);
 
@@ -53,12 +55,25 @@ public:
         fParticleGun = new G4ParticleGun(1);
         auto particle = G4ParticleTable::GetParticleTable()->FindParticle("mu-");
         fParticleGun->SetParticleDefinition(particle);
-        fParticleGun->SetParticleEnergy(1.0 * GeV);
-        fParticleGun->SetParticleMomentumDirection(G4ThreeVector(1., 0., 0.));
-        fParticleGun->SetParticlePosition(G4ThreeVector(-0.9 * m, 0., 0.));
     }
 
-    ~MyPrimaryGenerator() override { delete fParticleGun; }
+    void SetThetaPhiEnergy(double theta_deg, double phi_deg, double energy_GeV)
+    {
+        double theta = theta_deg * CLHEP::deg;
+        double phi = phi_deg * CLHEP::deg;
+
+        G4ThreeVector dir(
+            std::sin(theta) * std::cos(phi),
+            std::sin(theta) * std::sin(phi),
+            std::cos(theta));
+
+        double radius = 66.0 * m;
+        G4ThreeVector pos = -dir * radius;
+
+        fParticleGun->SetParticlePosition(pos);
+        fParticleGun->SetParticleMomentumDirection(dir);
+        fParticleGun->SetParticleEnergy(energy_GeV * GeV);
+    }
 
     void GeneratePrimaries(G4Event *event) override
     {
@@ -84,9 +99,9 @@ public:
         }
     }
 
-    void PrintTotalEnergy()
+    void PrintTotalEnergy() const
     {
-        G4cout << "Total energy deposited in event: " << totalEdep / keV << " keV" << G4endl;
+        G4cout << "Total energy deposited: " << totalEdep / GeV << " GeV" << G4endl;
     }
 
     void Reset()
@@ -98,6 +113,7 @@ private:
     G4double totalEdep;
 };
 
+// Event Action
 class MyEventAction : public G4UserEventAction
 {
 public:
@@ -122,15 +138,21 @@ private:
 class MyActionInitialization : public G4VUserActionInitialization
 {
 public:
+    MyActionInitialization(MyPrimaryGenerator *gen) : fGenerator(gen) {}
+
     void Build() const override
     {
         auto steppingAction = new MySteppingAction();
-        SetUserAction(new MyPrimaryGenerator());
+        SetUserAction(fGenerator);
         SetUserAction(steppingAction);
         SetUserAction(new MyEventAction(steppingAction));
     }
+
+private:
+    MyPrimaryGenerator *fGenerator;
 };
 
+// Main function
 int main(int argc, char **argv)
 {
     G4UIExecutive *ui = nullptr;
@@ -138,40 +160,43 @@ int main(int argc, char **argv)
         ui = new G4UIExecutive(argc, argv);
 
     auto runManager = new G4RunManager;
-
-    // Set up detector construction
     runManager->SetUserInitialization(new MyDetectorConstruction());
+    runManager->SetUserInitialization(new FTFP_BERT());
 
-    // Physics list
-    runManager->SetUserInitialization(new FTFP_BERT()); // FTFP_BERT physics list
+    auto primaryGen = new MyPrimaryGenerator();
+    runManager->SetUserInitialization(new MyActionInitialization(primaryGen));
 
-    // Set up action initialization
-    runManager->SetUserInitialization(new MyActionInitialization());
-
-    // Initialize the run manager
     runManager->Initialize();
 
-    // Visualization Manager
     auto visManager = new G4VisExecutive;
     visManager->Initialize();
 
-    // Get the UI manager and set up commands
     auto UImanager = G4UImanager::GetUIpointer();
-    UImanager->ApplyCommand("/vis/open TSGQT");              // OpenGL visualization
-    UImanager->ApplyCommand("/vis/viewer/set/viewpointThetaPhi 90 0"); // Set initial viewpoint
-    UImanager->ApplyCommand("/vis/drawVolume");                        // Draw the volume geometry
-    UImanager->ApplyCommand("/vis/scene/add/trajectories smooth");     // Add smooth trajectories
-    UImanager->ApplyCommand("/vis/scene/add/hits");                    // Show hits in the visualization
-    UImanager->ApplyCommand("/run/beamOn 1");                          // Run the simulation for 1 event
+    UImanager->ApplyCommand("/vis/open TSGQt");
+    UImanager->ApplyCommand("/vis/viewer/set/viewpointThetaPhi 90 0");
+    UImanager->ApplyCommand("/vis/drawVolume");
+    UImanager->ApplyCommand("/vis/scene/add/trajectories smooth");
+    UImanager->ApplyCommand("/vis/scene/add/hits");
+    UImanager->ApplyCommand("/vis/scene/endOfEventAction accumulate 0");
 
-    // Start the UI session (for interactive mode)
+    // θ-φ scan loop
+    for (int theta = 0; theta <= 180; theta += 30)
+    {
+        for (int phi = 0; phi < 360; phi += 30)
+        {
+            double energy = 25.0; // GeV
+            primaryGen->SetThetaPhiEnergy(theta, phi, energy);
+            runManager->BeamOn(1);
+            G4cout << "θ: " << theta << "°, φ: " << phi << "°, E: " << energy << " GeV" << G4endl;
+        }
+    }
+
     if (ui)
     {
         ui->SessionStart();
         delete ui;
     }
 
-    // Cleanup
     delete visManager;
     delete runManager;
 
